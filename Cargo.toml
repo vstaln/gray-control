@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT"
-description = "Per-session remote control: unix socket JSON-RPC (send/status/stop) + send_to_session tool. Reimplementation of mitsupi control."
+description = "Per-session remote control: unix socket JSON-RPC (send/status/stop) + send_to_session tool"
 
 [[bin]]
 name = "gray-control"

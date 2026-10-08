@@ -1,9 +1,16 @@
-# gray-control
+<p align="center">
+  <img src="assets/gray-logo.svg" alt="gray" width="96">
+</p>
+<h1 align="center">gray-control</h1>
+<p align="center">Remote-control a running gray session over a per-session unix socket.</p>
+<p align="center">
+  <a href="https://github.com/vstaln/gray-control/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="gray plugin" src="https://img.shields.io/badge/gray-plugin-7aa2f7.svg">
+  <img alt="rust" src="https://img.shields.io/badge/built%20with-rust-orange.svg">
+</p>
 
-Per-session remote control over a unix socket. Each gray session binds
-`~/.gray/control/<sid>.sock` (lazily, on the first hook that names a
-session) and serves line-delimited JSON-RPC. Clean-room reimplementation
-of mitsupi's `control` extension (proprietary source — zero code copied).
+Each gray session binds `~/.gray/control/<sid>.sock` (lazily, on the first
+hook that names a session) and serves line-delimited JSON-RPC.
 
 ## RPC
 
@@ -46,3 +53,7 @@ The socket file is removed on `plugin/shutdown`.
 gray plugin install ~/grayplugins/gray-control
 gray plugin capabilities control --all   # optional: enables host/say
 ```
+
+---
+Part of the [gray](https://github.com/vstaln/gray) plugin ecosystem —
+the open-source AI agent harness. <https://gray.alignment.id>

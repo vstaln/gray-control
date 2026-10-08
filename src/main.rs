@@ -1,8 +1,5 @@
 //! gray-control — per-session remote control over a unix socket.
 //!
-//! Clean-room reimplementation of mitsupi's `control` extension (that source
-//! is proprietary; behavior follows the port spec, zero code copied).
-//!
 //! Each session binds `~/.gray/control/<sid>.sock` (lazily, on the first
 //! hook that names a session) serving line-delimited JSON-RPC:
 //!
