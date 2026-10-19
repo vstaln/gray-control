@@ -1,4 +1,5 @@
-//! gray-control — per-session remote control over a unix socket.
+//! gray-control — per-session remote control over a unix socket
+//! (a 127.0.0.1 TCP listener on Windows).
 //!
 //! Each session binds `~/.gray/control/<sid>.sock` (lazily, on the first
 //! hook that names a session) serving line-delimited JSON-RPC:
@@ -15,8 +16,11 @@
 //! `nc -U` usage line. The socket file is removed on plugin/shutdown.
 
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener as ControlListener, UnixStream as ControlStream};
+#[cfg(windows)]
+use std::net::{TcpListener as ControlListener, TcpStream as ControlStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -28,7 +32,11 @@ use serde_json::{Value, json};
 fn gray_home() -> PathBuf {
     std::env::var_os("GRAY_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".gray")))
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|h| PathBuf::from(h).join(".gray"))
+        })
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
@@ -125,6 +133,52 @@ fn host_send(out: &Arc<Mutex<std::io::Stdout>>, method: &str, params: Value, id:
     let _ = o.flush();
 }
 
+/// Platform transport: a real unix socket on unix; on Windows a 127.0.0.1
+/// TCP listener whose port is written into `<sid>.sock`, so the same
+/// file-based discovery (glob the control dir) works on both.
+#[cfg(unix)]
+fn bind_control(sock: &Path) -> std::io::Result<ControlListener> {
+    let _ = std::fs::remove_file(sock); // stale socket from a dead run
+    ControlListener::bind(sock)
+}
+
+#[cfg(windows)]
+fn bind_control(sock: &Path) -> std::io::Result<ControlListener> {
+    let listener = ControlListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    let port = listener.local_addr()?.port();
+    std::fs::write(sock, port.to_string())?;
+    Ok(listener)
+}
+
+#[cfg(unix)]
+fn connect_control(sock: &Path) -> std::io::Result<ControlStream> {
+    ControlStream::connect(sock)
+}
+
+#[cfg(windows)]
+fn connect_control(sock: &Path) -> std::io::Result<ControlStream> {
+    let port: u16 = std::fs::read_to_string(sock)?.trim().parse().map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "bad control port file")
+    })?;
+    ControlStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+}
+
+#[cfg(unix)]
+fn control_usage(sock: &Path) -> String {
+    format!(
+        "echo '{{\"method\":\"send\",\"text\":\"hi\"}}' | nc -U {}",
+        sock.display()
+    )
+}
+
+#[cfg(windows)]
+fn control_usage(sock: &Path) -> String {
+    format!(
+        "connect to 127.0.0.1:<port stored in {}> and send one JSON request per line",
+        sock.display()
+    )
+}
+
 // ---------- socket listener ---------------------------------------------------
 
 fn ensure_listener(sh: &Arc<Shared>) {
@@ -142,8 +196,7 @@ fn ensure_listener(sh: &Arc<Shared>) {
         return;
     }
     let sock = dir.join(format!("{}.sock", sanitize(&sid)));
-    let _ = std::fs::remove_file(&sock); // stale socket from a dead run
-    match UnixListener::bind(&sock) {
+    match bind_control(&sock) {
         Ok(listener) => {
             sh.session.lock().expect("session").sock = Some(sock.clone());
             let sh2 = sh.clone();
@@ -156,7 +209,7 @@ fn ensure_listener(sh: &Arc<Shared>) {
     }
 }
 
-fn accept_loop(sh: Arc<Shared>, listener: UnixListener, sock: PathBuf) {
+fn accept_loop(sh: Arc<Shared>, listener: ControlListener, sock: PathBuf) {
     let _ = listener.set_nonblocking(true);
     while !sh.stop.load(Ordering::SeqCst) {
         match listener.accept() {
@@ -170,7 +223,7 @@ fn accept_loop(sh: Arc<Shared>, listener: UnixListener, sock: PathBuf) {
     let _ = std::fs::remove_file(&sock);
 }
 
-fn handle_conn(sh: &Arc<Shared>, stream: UnixStream) {
+fn handle_conn(sh: &Arc<Shared>, stream: ControlStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
     let Ok(mut w) = stream.try_clone() else { return };
     for line in BufReader::new(stream).lines() {
@@ -279,7 +332,7 @@ fn send_to_session(args: &Value) -> Result<String, String> {
             format!("no control socket for '{sid}' — live sessions: {}", others.join(", "))
         });
     }
-    let mut stream = UnixStream::connect(&sock)
+    let mut stream = connect_control(&sock)
         .map_err(|e| format!("couldn't connect to {}: {e}", sock.display()))?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let req = json!({"method": "send", "text": text, "id": "send_to_session"});
@@ -327,11 +380,11 @@ fn run_command(sh: &Arc<Shared>, argv: &[&str]) -> String {
                 "not bound yet".to_string()
             };
             format!(
-                "gray-control {} — {}\nsock: {}\nusage: echo '{{\"method\":\"send\",\"text\":\"hi\"}}' | nc -U {}\nmethods: send {{text}} · status · stop — also: /control list, /control stop",
+                "gray-control {} — {}\nsock: {}\nusage: {}\nmethods: send {{text}} · status · stop — also: /control list, /control stop",
                 env!("CARGO_PKG_VERSION"),
                 listening,
                 sock.display(),
-                sock.display(),
+                control_usage(&sock),
             )
         }
     }
