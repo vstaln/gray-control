@@ -411,6 +411,7 @@ fn manifest() -> Value {
             }
         }],
         "commands": ["/control"],
+        "command_descriptions": {"/control": "show and manage the remote-control socket"},
         "hooks": ["agent/before_start"],
     })
 }
