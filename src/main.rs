@@ -16,11 +16,11 @@
 //! `nc -U` usage line. The socket file is removed on plugin/shutdown.
 
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
-#[cfg(unix)]
-use std::os::unix::net::{UnixListener as ControlListener, UnixStream as ControlStream};
 #[cfg(windows)]
 use std::net::{TcpListener as ControlListener, TcpStream as ControlStream};
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener as ControlListener, UnixStream as ControlStream};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -48,7 +48,13 @@ fn control_dir() -> PathBuf {
 fn sanitize(s: &str) -> String {
     let s: String = s
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     if s.is_empty() { "session".into() } else { s }
 }
@@ -59,7 +65,9 @@ fn sock_path(sid: &str) -> PathBuf {
 
 /// Every live control socket → session id (filename minus `.sock`).
 fn list_sessions() -> Vec<String> {
-    let Ok(rd) = std::fs::read_dir(control_dir()) else { return Vec::new() };
+    let Ok(rd) = std::fs::read_dir(control_dir()) else {
+        return Vec::new();
+    };
     let mut v: Vec<String> = rd
         .flatten()
         .filter_map(|e| {
@@ -104,9 +112,19 @@ impl Shared {
 }
 
 fn note_session(sh: &Shared, params: &Value) {
-    let Some(sess) = params.get("session") else { return };
-    let sid = sess.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-    let cwd = sess.get("cwd").and_then(Value::as_str).unwrap_or("").to_string();
+    let Some(sess) = params.get("session") else {
+        return;
+    };
+    let sid = sess
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let cwd = sess
+        .get("cwd")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let mut s = sh.session.lock().expect("session");
     if !sid.is_empty() && s.sid.is_empty() {
         s.sid = sid;
@@ -225,7 +243,9 @@ fn accept_loop(sh: Arc<Shared>, listener: ControlListener, sock: PathBuf) {
 
 fn handle_conn(sh: &Arc<Shared>, stream: ControlStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
-    let Ok(mut w) = stream.try_clone() else { return };
+    let Ok(mut w) = stream.try_clone() else {
+        return;
+    };
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
@@ -284,7 +304,12 @@ fn rpc_send(sh: &Arc<Shared>, v: &Value) -> Value {
     // Best-effort immediate surface: fire-and-forget — a dropped/erroring
     // host/say (capability ungranted) must not affect the queue path.
     let id = next_id(&sh.counter);
-    host_send(&sh.out, "host/say", json!({"text": format!("[control] {text}")}), Some(&id));
+    host_send(
+        &sh.out,
+        "host/say",
+        json!({"text": format!("[control] {text}")}),
+        Some(&id),
+    );
     json!({"ok": true, "queued": true})
 }
 
@@ -316,7 +341,11 @@ fn before_start(sh: &Arc<Shared>, params: &Value) -> Value {
 
 fn send_to_session(args: &Value) -> Result<String, String> {
     let sid = args.get("sid").and_then(Value::as_str).unwrap_or("").trim();
-    let text = args.get("text").and_then(Value::as_str).unwrap_or("").trim();
+    let text = args
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if sid.is_empty() {
         return Err("missing required argument: sid".into());
     }
@@ -327,9 +356,15 @@ fn send_to_session(args: &Value) -> Result<String, String> {
     if !sock.exists() {
         let others = list_sessions();
         return Err(if others.is_empty() {
-            format!("no control socket for '{sid}' (no live control sockets at all in {})", control_dir().display())
+            format!(
+                "no control socket for '{sid}' (no live control sockets at all in {})",
+                control_dir().display()
+            )
         } else {
-            format!("no control socket for '{sid}' — live sessions: {}", others.join(", "))
+            format!(
+                "no control socket for '{sid}' — live sessions: {}",
+                others.join(", ")
+            )
         });
     }
     let mut stream = connect_control(&sock)
@@ -342,12 +377,15 @@ fn send_to_session(args: &Value) -> Result<String, String> {
     BufReader::new(&stream)
         .read_line(&mut reply)
         .map_err(|e| format!("no reply from {sid}: {e}"))?;
-    let v: Value = serde_json::from_str(reply.trim())
-        .map_err(|e| format!("bad reply from {sid}: {e}"))?;
+    let v: Value =
+        serde_json::from_str(reply.trim()).map_err(|e| format!("bad reply from {sid}: {e}"))?;
     if v.get("ok").and_then(Value::as_bool) == Some(true) {
         Ok(format!("sent to {sid} (queued for its next turn)"))
     } else {
-        Err(format!("{sid} refused: {}", v.get("error").and_then(Value::as_str).unwrap_or("unknown")))
+        Err(format!(
+            "{sid} refused: {}",
+            v.get("error").and_then(Value::as_str).unwrap_or("unknown")
+        ))
     }
 }
 
@@ -367,10 +405,13 @@ fn run_command(sh: &Arc<Shared>, argv: &[&str]) -> String {
         }
         _ => {
             let s = sh.session.lock().expect("session");
-            let sock = s
-                .sock
-                .clone()
-                .unwrap_or_else(|| sock_path(if s.sid.is_empty() { "<pending>" } else { &s.sid }));
+            let sock = s.sock.clone().unwrap_or_else(|| {
+                sock_path(if s.sid.is_empty() {
+                    "<pending>"
+                } else {
+                    &s.sid
+                })
+            });
             let err = sh.listen_err.lock().expect("listen_err").clone();
             let listening = if s.sock.is_some() {
                 "listening".to_string()
@@ -483,7 +524,9 @@ fn main() {
         let stdin = std::io::stdin();
         for line in stdin.lock().lines() {
             let Ok(line) = line else { break };
-            let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+            let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
             if v.get("id").is_some_and(Value::is_string) && v.get("method").is_none() {
                 continue; // stray host reply to a fire-and-forget request
             }
@@ -515,7 +558,9 @@ mod tests {
     }
 
     fn call(sh: &Arc<Shared>, method: &str, params: Value) -> Value {
-        handle(sh, &json!({ "id": 1, "method": method, "params": params })).0.unwrap()
+        handle(sh, &json!({ "id": 1, "method": method, "params": params }))
+            .0
+            .unwrap()
     }
 
     fn sess() -> Value {
@@ -537,7 +582,11 @@ mod tests {
     fn send_rpc_queues_for_before_start() {
         let sh = shared();
         // socket writes host/say on the wire — swallow that line into the test
-        let resp: Value = serde_json::from_str(&dispatch_rpc(&sh, r#"{"method":"send","text":"hi there","id":7}"#)).unwrap();
+        let resp: Value = serde_json::from_str(&dispatch_rpc(
+            &sh,
+            r#"{"method":"send","text":"hi there","id":7}"#,
+        ))
+        .unwrap();
         assert_eq!(resp["ok"], json!(true));
         assert_eq!(resp["queued"], json!(true));
         assert_eq!(resp["id"], json!(7));
@@ -559,7 +608,8 @@ mod tests {
     fn status_rpc_reports_session() {
         let sh = shared();
         call(&sh, "agent/before_start", json!({"session": sess()}));
-        let resp: Value = serde_json::from_str(&dispatch_rpc(&sh, r#"{"method":"status"}"#)).unwrap();
+        let resp: Value =
+            serde_json::from_str(&dispatch_rpc(&sh, r#"{"method":"status"}"#)).unwrap();
         assert_eq!(resp["ok"], json!(true));
         assert_eq!(resp["sid"], json!("sess-1"));
         assert_eq!(resp["cwd"], json!("/tmp"));
@@ -569,7 +619,8 @@ mod tests {
     #[test]
     fn stop_rpc_sets_flag_and_unknown_errors() {
         let sh = shared();
-        let resp: Value = serde_json::from_str(&dispatch_rpc(&sh, r#"{"method":"bogus"}"#)).unwrap();
+        let resp: Value =
+            serde_json::from_str(&dispatch_rpc(&sh, r#"{"method":"bogus"}"#)).unwrap();
         assert_eq!(resp["ok"], json!(false));
         assert!(resp["error"].as_str().unwrap().contains("unknown method"));
         let resp: Value = serde_json::from_str(&dispatch_rpc(&sh, r#"{"method":"stop"}"#)).unwrap();
@@ -580,7 +631,11 @@ mod tests {
     #[test]
     fn send_to_session_validates_args() {
         assert!(send_to_session(&json!({})).unwrap_err().contains("sid"));
-        assert!(send_to_session(&json!({"sid":"x"})).unwrap_err().contains("text"));
+        assert!(
+            send_to_session(&json!({"sid":"x"}))
+                .unwrap_err()
+                .contains("text")
+        );
         let e = send_to_session(&json!({"sid":"definitely-no-such-sid","text":"hi"})).unwrap_err();
         assert!(e.contains("no control socket"), "{e}");
     }
